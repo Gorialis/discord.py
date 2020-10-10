@@ -593,6 +593,8 @@ class AudioPlayer(threading.Thread):
                 self.stop()
                 break
 
+            # TODO: profile timing accuracy/validity
+
             play_audio(data, encode=not self.source.is_opus())
             next_time = self._start + self.DELAY * self.loops
             delay = max(0, self.DELAY + (next_time - time.perf_counter()))
