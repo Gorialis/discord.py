@@ -1,0 +1,90 @@
+# -*- coding: utf-8 -*-
+
+name: Build and test distributions
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - '*'
+
+jobs:
+  build-distributions:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        python-version: [ 3.8, 3.9 ]
+        python-arch: [ 'x64' ]
+
+        # Additional matrix inclusions
+        include:
+          # On Windows only, also do 32-bit builds
+          - os: windows-latest
+            python-version: '3.8'
+            python-arch: 'x86'
+          - os: windows-latest
+            python-version: '3.9'
+            python-arch: 'x86'
+
+    name: Build and test distribution for CPython ${{ matrix.python-version }} ${{ matrix.python-arch }} on  ${{ matrix.os }}
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+        with:
+          # Fetch depth of 0 means the entire git history will be retrieved
+          # This is slower, but if you don't do this, it will create a single-commit 'shallow' clone
+          # A shallow clone only has one commit, so this would make the version numbers look like X.Y.Za1 instead of the real commit number.
+          # See https://git-scm.com/docs/shallow
+          fetch-depth: 0
+
+      - name: Install and set up Python ${{ matrix.python-version }} ${{ matrix.python-arch }}
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: ${{ matrix.python-arch }}
+
+      - name: "[Ubuntu] Install libffi, libnacl, libopus"
+        shell: bash
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libffi-dev libsodium-dev libopus-dev
+
+      - name: "[macOS] Install libffi, libnacl, libopus"
+        shell: bash
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install libffi libsodium opus
+
+      - name: Install meta dependencies
+        shell: bash
+        run: |
+          python -m pip install -U pip setuptools wheel
+
+      - name: Build distributions
+        shell: bash
+        run: |
+          python ./setup.py sdist bdist_wheel
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.python-arch }}-distributions
+          path: dist/*
+
+      - name: Install library
+        shell: bash
+        run: |
+          python -m pip install -U .[docs,voice]
+
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          python -m pip install -U coverage pytest pytest-asyncio pytest-cov
+
+      - name: Run tests
+        shell: bash
+        run: |
+          PYTHONPATH="$(pwd)" pytest -vs --cov=discord --cov-report term-missing:skip-covered
