@@ -41,7 +41,7 @@ def test_encoding():
     This serves as a test that the interface to opus and nacl work properly.
     """
 
-    from discord.opus import Encoder
+    from discord.opus import Decoder, Encoder
 
     encoder = Encoder()
 
@@ -66,13 +66,17 @@ def test_encoding():
         value = magnitude * math.sin(2 * math.pi * sample_time * frequency)
 
         # Duplicate PCM value per channel
-        pcm_data += struct.pack('>h', int(value)) * encoder.CHANNELS
+        pcm_data += struct.pack('h', int(value)) * encoder.CHANNELS
 
     # Ensure data generated is of correct form
     assert len(pcm_data) == (encoder.FRAME_SIZE * frames_per_second)
 
     # Encode the data
-    opus_data = encoder.encode(pcm_data, encoder.SAMPLES_PER_FRAME)
+    opus_packets = []
+
+    for index in range(0, len(pcm_data), encoder.FRAME_SIZE):
+        encoded = encoder.encode(pcm_data[index : index + encoder.FRAME_SIZE], encoder.SAMPLES_PER_FRAME)
+        opus_packets.append(encoded)
 
     # Prepare to encrypt the data
     import nacl.secret
@@ -83,13 +87,43 @@ def test_encoding():
     box = nacl.secret.SecretBox(secret_key)
 
     # Encrypt the data
-    encrypted_data = box.encrypt(opus_data)
+    encrypted_packets = []
 
-    # Check message length
-    assert len(encrypted_data) == len(opus_data) + box.NONCE_SIZE + box.MACBYTES
+    for packet in opus_packets:
+        encrypted_data = box.encrypt(packet)
+
+        # Check message length
+        assert len(encrypted_data) == len(packet) + box.NONCE_SIZE + box.MACBYTES
+
+        encrypted_packets.append(encrypted_data)
 
     # Decrypt the data
-    decrypted_data = box.decrypt(encrypted_data)
+    decrypted_packets = []
 
-    # Ensure data matches
-    assert decrypted_data == opus_data
+    for packet, original_packet in zip(encrypted_packets, opus_packets):
+        decrypted_data = box.decrypt(packet)
+
+        # Ensure data matches
+        assert decrypted_data == original_packet
+
+        decrypted_packets.append(decrypted_data)
+
+    # Create decoder
+    decoder = Decoder()
+    decoder.set_volume(1.0)
+
+    # Decode the data
+    decoded_pcm = b''
+
+    for packet in decrypted_packets:
+        decoded_pcm += decoder.decode(packet)
+    
+    assert len(decoded_pcm) == len(pcm_data)
+
+    # If we were dealing with completely clean data, we could compare the PCM with an error region and just call it a day.
+    # Unfortunately for us, opus is smarter than this.
+    # The compression introduces subtle frequencies of noise that are inaudible but show up in a spectogram,
+    #  and, consequently, show up in our raw PCM data as well
+    # If we implemented a Fourier transform and did frequency analysis against the Middle C,
+    #  we'd be able to actually test that our PCM is good.
+    # This, however, is way out of the scope of this unit test without external dependencies.
